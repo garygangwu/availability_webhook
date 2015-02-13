@@ -17,7 +17,7 @@ define("DB_NAME", "airbnb");
 //  +------------+-------------+------+-----+-----------+-------+
 //  | Field      | Type        | Null | Key | Default   | Extra |
 //  +------------+-------------+------+-----+-----------+-------+
-//  | listing_id | varchar(20) | NO   |     |           |       |
+//  | listing_id | varchar(20) | NO   | PRI |           |       |
 //  | busy_date  | varchar(20) | NO   | PRI |           |       |
 //  | code       | varchar(64) | NO   |     | fake_code |       |
 //  +------------+-------------+------+-----+-----------+-------+
@@ -40,7 +40,7 @@ header('Content-type: application/json');
 try {
   sanity_check_input($action, $listing_id, $check_in, $check_out, $check_in_time, $check_out_time, $code);
 } catch (Exception $e) {
-  render_output(array('error' => 'bad_input', 'error_message' => $e->getMessage()));
+  render_output(array('error_type' => 'bad_input', 'error_message' => $e->getMessage()));
   return;
 }
 
@@ -56,11 +56,11 @@ try {
       $result = free($listing_id, $code, $check_in_time, $check_out_time);
       break;
     case CHECK:
-      $result = check($check_in_time, $check_out_time);
+      $result = check($listing_id, $check_in_time, $check_out_time);
       break;
   }
 } catch (Exception $e) {
-  render_output(array('error' => 'query_failed', 'error_message' => $e->getMessage()));
+  render_output(array('error_type' => 'query_failed', 'error_message' => $e->getMessage()));
   return;
 }
 
@@ -88,12 +88,12 @@ function dump($check_in_time, $check_out_time) {
   return $ret;
 }
 
-function check($check_in_time, $check_out_time) {
+function check($listing_id, $check_in_time, $check_out_time) {
   $conn = open_db_conn();
   $check_in = date('Y-m-d', $check_in_time);
   $check_out = date('Y-m-d', $check_out_time);
   $statement = "SELECT COUNT(1) as cnt FROM calendar " .
-               "WHERE busy_date >= '{$check_in}' AND busy_date < '{$check_out}';";
+               "WHERE listing_id = '{$listing_id}' AND busy_date >= '{$check_in}' AND busy_date < '{$check_out}';";
   $result = mysql_query($statement, $conn);
   if (!$result) {
     throw new Exception("DB query failed");
@@ -103,6 +103,7 @@ function check($check_in_time, $check_out_time) {
 
   return array(
     "available" => $count == 0 ? TRUE : FALSE,
+    "listing_id" => $listing_id,
     "check_in" => $check_in, 
     "check_out" => $check_out,
     "action" => "check"
@@ -171,7 +172,7 @@ function sanity_check_input($action, $listing_id, $check_in, $check_out, $check_
     throw new Exception("missing check_in or check_out date");
   }
 
-  if (is_null($listing_id) && ($action == TAKE || $action == FREE)) {
+  if (is_null($listing_id) && ($action == TAKE || $action == FREE || $action == CHECK)) {
     throw new Exception("listing_id missing");
   }
 
