@@ -5,6 +5,7 @@ define("DUMP", "dump");
 define("CHECK", "check");
 define("TAKE", "take");
 define("FREE", "free");
+define("SECONDS_PER_DAY", 86400);
 
 // DB related
 define("DB_HOST", "localhost");
@@ -24,13 +25,13 @@ define("DB_NAME", "airbnb");
 $acceptable_actions = array(DUMP, CHECK, TAKE, FREE);
 
 $listing_id = idx($_GET, 'listing_id');
-$start = idx($_GET, 'start');
-$end = idx($_GET, 'end');
+$check_in = idx($_GET, 'check_in');
+$check_out = idx($_GET, 'check_out');
 $action = strtolower(idx($_GET, 'action'));
 $code = idx($_GET, 'code');
 
-$start_time = strtotime($start);
-$end_time = strtotime($end);
+$check_in_time = strtotime($check_in);
+$check_out_time = strtotime($check_out);
 $now = time();
 
 // headers for not caching the results
@@ -40,32 +41,28 @@ header('Cache-Control: no-cache, must-revalidate');
 header('Content-type: application/json');
 
 if (is_null($listing_id) && ($action == TAKE || $action == FREE) ||
-    is_null($code) && $action == FREE ||
-    $start_time <= $now ||
-    $start_time >= $end_time ||
-    $end_time > $now + 365 * 24 * 60 * 60 ||
+    is_null($code) && ($action == TAKE || $action == FREE) ||
+    $check_in_time <= $now ||
+    $check_in_time >= $check_out_time ||
+    $check_out_time > $now + 365 * SECONDS_PER_DAY ||
     !in_array($action, $acceptable_actions)) {
   render_output(array('error' => 'bad_input'));
   return;
 }
 
-$result = array();
-$result['start'] = date('Y/m/d', $start_time);
-$result['end'] = date('Y/m/d', $end_time);
-
 try {
   switch ($action) {
     case DUMP:
-      $result = dump($start_time, $end_time);
+      $result = dump($check_in_time, $check_out_time);
       break;
     case TAKE:
-      $result = take($listing_id, $start_time, $end_time);
+      $result = take($listing_id, $code, $check_in_time, $check_out_time);
       break;
     case FREE:
-      $result = free($listing_id, $code, $start_time, $end_time);
+      $result = free($listing_id, $code, $check_in_time, $check_out_time);
       break;
     case CHECK:
-      $result = check($start_time, $end_time);
+      $result = check($check_in_time, $check_out_time);
       break;
   }
 } catch (Exception $e) {
@@ -77,12 +74,12 @@ try {
 render_output($result);
 
 
-function dump($start_time, $end_time) {
+function dump($check_in_time, $check_out_time) {
   $conn = open_db_conn();
-  $start = date('Y-m-d', $start_time);
-  $end = date('Y-m-d', $end_time);
+  $check_in = date('Y-m-d', $check_in_time);
+  $check_out = date('Y-m-d', $check_out_time);
   $statement = "SELECT listing_id, busy_date, code FROM calendar " .
-               "WHERE busy_date >= '{$start}' AND busy_date <= '{$end}';";
+               "WHERE busy_date >= '{$check_in}' AND busy_date < '{$check_out}';";
   $result = mysql_query($statement, $conn);
   if (!$result) {
     throw new Exception("DB query failed");
@@ -98,12 +95,12 @@ function dump($start_time, $end_time) {
   return $ret;
 }
 
-function check($start_time, $end_time) {
+function check($check_in_time, $check_out_time) {
   $conn = open_db_conn();
-  $start = date('Y-m-d', $start_time);
-  $end = date('Y-m-d', $end_time);
+  $check_in = date('Y-m-d', $check_in_time);
+  $check_out = date('Y-m-d', $check_out_time);
   $statement = "SELECT COUNT(1) as cnt FROM calendar " .
-               "WHERE busy_date >= '{$start}' AND busy_date <= '{$end}';";
+               "WHERE busy_date >= '{$check_in}' AND busy_date < '{$check_out}';";
   $result = mysql_query($statement, $conn);
   if (!$result) {
     throw new Exception("DB query failed");
@@ -113,20 +110,19 @@ function check($start_time, $end_time) {
 
   return array(
     "available" => $count == 0 ? TRUE : FALSE,
-    "listing_id" => $listing_id,
-    "start" => $start, 
-    "end" => $end,
+    "check_in" => $check_in, 
+    "check_out" => $check_out,
     "action" => "check"
   );
 }
 
-function free($listing_id, $code, $start_time, $end_time) {
+function free($listing_id, $code, $check_in_time, $check_out_time) {
   $conn = open_db_conn();
-  $start = date('Y-m-d', $start_time);
-  $end = date('Y-m-d', $end_time);
+  $check_in = date('Y-m-d', $check_in_time);
+  $check_out = date('Y-m-d', $check_out_time);
   $statement = "DELETE FROM calendar " .
                "WHERE listing_id='{$listing_id}' AND code='{$code}' AND " . 
-                     "busy_date >= '{$start}' AND busy_date <= '{$end}';";
+                     "busy_date >= '{$check_in}' AND busy_date < '{$check_out}';";
   $result = mysql_query($statement, $conn);
 
   echo $statement . "\n";
@@ -137,25 +133,24 @@ function free($listing_id, $code, $start_time, $end_time) {
     "succeed" => true,
     "listing_id" => $listing_id,
     "code" => $code,
-    "start" => date('Y-m-d', $start_time),
-    "end" => date('Y-m-d', $end_time),
+    "check_in" => date('Y-m-d', $check_in_time),
+    "check_out" => date('Y-m-d', $check_out_time),
     "action" => "free",
     "num_days_freed" => mysql_affected_rows()
   );
 }
 
-function take($listing_id, $start_time, $end_time) {
+function take($listing_id, $code, $check_in_time, $check_out_time) {
   $conn = open_db_conn();
-  $code = generate_code();
   
   $statement = 'INSERT INTO calendar (listing_id, busy_date, code) VALUES ';
 
   $values_to_update = array();
-  $cur_time = $start_time;
-  while ($cur_time <= $end_time) {
+  $cur_time = $check_in_time;
+  while ($cur_time < $check_out_time) {
     $busy_date = date('Y-m-d', $cur_time);
     $values_to_update[] = "('{$listing_id}', '{$busy_date}', '{$code}')";
-    $cur_time += 24 * 60 * 60;
+    $cur_time += SECONDS_PER_DAY;
   }
   $statement = $statement . implode(',', $values_to_update) . ';';
 
@@ -163,8 +158,8 @@ function take($listing_id, $start_time, $end_time) {
 
   $ret =  array(
     "listing_id" => $listing_id,
-    "start" => date('Y-m-d', $start_time),
-    "end" => date('Y-m-d', $end_time),
+    "check_in" => date('Y-m-d', $check_in_time),
+    "check_out" => date('Y-m-d', $check_out_time),
     "action" => "take"
   );
 
@@ -184,10 +179,6 @@ function open_db_conn() {
     throw new Exception("DB open failed");
   }
   return $conn;
-}
-
-function generate_code() {
-  return md5(strval(time()) . "_" . strval(rand()));
 }
 
 function idx($array, $key) {
