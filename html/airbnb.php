@@ -22,8 +22,6 @@ define("DB_NAME", "airbnb");
 //  | code       | varchar(64) | NO   |     | fake_code |       |
 //  +------------+-------------+------+-----+-----------+-------+
 
-$acceptable_actions = array(DUMP, CHECK, TAKE, FREE);
-
 $listing_id = idx($_GET, 'listing_id');
 $check_in = idx($_GET, 'check_in');
 $check_out = idx($_GET, 'check_out');
@@ -32,7 +30,6 @@ $code = idx($_GET, 'code');
 
 $check_in_time = strtotime($check_in);
 $check_out_time = strtotime($check_out);
-$now = time();
 
 // headers for not caching the results
 header('Cache-Control: no-cache, must-revalidate');
@@ -40,13 +37,10 @@ header('Cache-Control: no-cache, must-revalidate');
 // headers to tell that result is JSON
 header('Content-type: application/json');
 
-if (is_null($listing_id) && ($action == TAKE || $action == FREE) ||
-    is_null($code) && ($action == TAKE || $action == FREE) ||
-    $check_in_time <= $now ||
-    $check_in_time >= $check_out_time ||
-    $check_out_time > $now + 365 * SECONDS_PER_DAY ||
-    !in_array($action, $acceptable_actions)) {
-  render_output(array('error' => 'bad_input'));
+try {
+  sanity_check_input($action, $listing_id, $check_in, $check_out, $check_in_time, $check_out_time, $code);
+} catch (Exception $e) {
+  render_output(array('error' => 'bad_input', 'error_message' => $e->getMessage()));
   return;
 }
 
@@ -66,8 +60,7 @@ try {
       break;
   }
 } catch (Exception $e) {
-  $error_result = array('error' => 'query_failed', 'error_message' => $e->getMessage());
-  render_output($error_result);
+  render_output(array('error' => 'query_failed', 'error_message' => $e->getMessage()));
   return;
 }
 
@@ -171,6 +164,38 @@ function take($listing_id, $code, $check_in_time, $check_out_time) {
   }
 
   return $ret;
+}
+
+function sanity_check_input($action, $listing_id, $check_in, $check_out, $check_in_time, $check_out_time, $code) {
+  if (is_null($check_in) || is_null($check_out)) {
+    throw new Exception("missing check_in or check_out date");
+  }
+
+  if (is_null($listing_id) && ($action == TAKE || $action == FREE)) {
+    throw new Exception("listing_id missing");
+  }
+
+  if (is_null($code) && ($action == TAKE || $action == FREE)) {
+    throw new Exception("code missing");
+  }
+
+  $now = time();
+  if ($check_in_time <= $now - SECONDS_PER_DAY) {
+    throw new Exception("check_in is a past date");
+  }
+
+  if ($check_in_time >= $check_out_time) {
+    throw new Exception("check_out date is before or equal to the check_in date");
+  }
+
+  if ($check_out_time > $now + 365 * SECONDS_PER_DAY) {
+    throw new Exception("out of supported check out date range");
+  }
+
+  $permit_actions = array(DUMP, CHECK, TAKE, FREE);
+  if (!in_array($action, $permit_actions)) {
+    throw new Exception("Unsupported action. Available actions are " . implode(', ', $permit_actions));
+  }
 }
 
 function open_db_conn() {
