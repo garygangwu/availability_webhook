@@ -21,9 +21,9 @@ define("DB_NAME", "airbnb");
 //  +----------------+-------------+------+-----+---------+-------+
 //  | Field          | Type        | Null | Key | Default | Extra |
 //  +----------------+-------------+------+-----+---------+-------+
-//  | reservation_id | int(11)     | NO   | MUL | NULL    |       |
 //  | listing_id     | int(11)     | NO   | PRI | NULL    |       |
 //  | busy_date      | varchar(16) | NO   | PRI | NULL    |       |
+//  | code           | varchar(16) | NO   |     | NULL    |       |
 //  +----------------+-------------+------+-----+---------+-------+
 
 //
@@ -39,7 +39,7 @@ if ($_SERVER['REQUEST_METHOD'] != 'GET') {
 $listing_id = (int)idx($_REQUEST, $post_body, 'listing_id');
 $check_in = idx($_REQUEST, $post_body, 'start_date');
 $nights = (int)idx($_REQUEST, $post_body, 'nights');
-$reservation_id = (int)idx($_REQUEST, $post_body, 'reservation_id');
+$code = idx($_REQUEST, $post_body, 'code');
 
 $check_in_time = strtotime($check_in);
 $check_out_time = $check_in_time + $nights * SECONDS_PER_DAY;
@@ -67,7 +67,7 @@ header('Cache-Control: no-cache, must-revalidate');
 header('Content-type: application/json');
 
 try {
-  sanity_check_input($action, $listing_id, $check_in, $check_out, $check_in_time, $check_out_time, $reservation_id);
+  sanity_check_input($action, $listing_id, $check_in, $check_out, $check_in_time, $check_out_time, $code);
 } catch (Exception $e) {
   http_response_code(400);
   render_output(array('error_type' => 'bad_input', 'error_message' => $e->getMessage()));
@@ -84,13 +84,13 @@ try {
       $result = dump($check_in_time, $check_out_time);
       break;
     case RESERVE:
-      $result = reserve($listing_id, $reservation_id, $check_in_time, $check_out_time);
+      $result = reserve($listing_id, $code, $check_in_time, $check_out_time);
       break;
     case CANCEL:
-      $result = cancel($reservation_id);
+      $result = cancel($code);
       break;
     case UPDATE:
-      $result = update($listing_id, $reservation_id, $check_in_time, $check_out_time);
+      $result = update($listing_id, $code, $check_in_time, $check_out_time);
       break;
     case CHECK:
       $result = check($listing_id, $check_in_time, $check_out_time);
@@ -116,7 +116,7 @@ function dump($check_in_time, $check_out_time) {
   $conn = open_db_conn();
   $check_in = date('Y-m-d', $check_in_time);
   $check_out = date('Y-m-d', $check_out_time);
-  $statement = "SELECT reservation_id, listing_id, busy_date FROM reservations " .
+  $statement = "SELECT listing_id, busy_date, code FROM reservations " .
                "WHERE busy_date >= '{$check_in}' AND busy_date < '{$check_out}';";
   $result = mysql_query($statement, $conn);
   if (!$result) {
@@ -127,7 +127,7 @@ function dump($check_in_time, $check_out_time) {
     $ret[] = array(
       'listing_id' => $row['listing_id'],
       'date' => $row['busy_date'],
-      'reservation_id' => $row['reservation_id']
+      'code' => $row['code']
     );
   }
   return $ret;
@@ -154,10 +154,10 @@ function check($listing_id, $check_in_time, $check_out_time) {
   );
 }
 
-function cancel($reservation_id) {
+function cancel($code) {
   $conn = open_db_conn();
   $statement = "DELETE FROM reservations " .
-               "WHERE reservation_id={$reservation_id};";
+               "WHERE code='{$code}';";
   $result = mysql_query($statement, $conn);
 
   if (!$result) {
@@ -175,16 +175,16 @@ function cancel($reservation_id) {
   );
 }
 
-function reserve($listing_id, $reservation_id, $check_in_time, $check_out_time) {
+function reserve($listing_id, $code, $check_in_time, $check_out_time) {
   $conn = open_db_conn();
   
-  $statement = 'INSERT INTO reservations (reservation_id, listing_id, busy_date) VALUES ';
+  $statement = 'INSERT INTO reservations (listing_id, busy_date, code) VALUES ';
 
   $values_to_update = array();
   $cur_time = $check_in_time;
   while ($cur_time < $check_out_time) {
     $busy_date = date('Y-m-d', $cur_time);
-    $values_to_update[] = "({$reservation_id}, {$listing_id}, '{$busy_date}')";
+    $values_to_update[] = "({$listing_id}, '{$busy_date}', '{$code}')";
     $cur_time += SECONDS_PER_DAY;
   }
   $statement = $statement . implode(',', $values_to_update) . ';';
@@ -194,24 +194,24 @@ function reserve($listing_id, $reservation_id, $check_in_time, $check_out_time) 
   return array(
     "succeed" => $result? true : false,
     "listing_id" => $listing_id,
-    "reservation_id" => $reservation_id,
+    "code" => $code,
     "check_in" => date('Y-m-d', $check_in_time),
     "check_out" => date('Y-m-d', $check_out_time),
   );
 }
 
-function update($listing_id, $reservation_id, $check_in_time, $check_out_time) {
+function update($listing_id, $code, $check_in_time, $check_out_time) {
   $conn = open_db_conn();
-  // Ensure the input $listing_id $reservation_id matches to the existing records
+  // Ensure the input $listing_id $code matches to the existing records
   $statement = "SELECT listing_id " .
-               "FROM reservations WHERE reservation_id = $reservation_id;";
+               "FROM reservations WHERE code = '{$code}';";
   $result = mysql_query($statement, $conn);
   if (!$result) {
     throw new Exception("DB query failed");
   }
   $row = mysql_fetch_assoc($result);
   if (!$row || is_null($row['listing_id'])) {
-    throw new RuntimeException("Reservation id, $reservation_id, cannot be found");
+    throw new RuntimeException("Reservation id, $code, cannot be found");
   }
   $db_listing_id = (int)$row['listing_id'];
   if ($listing_id != $db_listing_id) {
@@ -224,18 +224,18 @@ function update($listing_id, $reservation_id, $check_in_time, $check_out_time) {
     mysql_query("BEGIN", $conn);
 
     $delete_statement = "DELETE FROM reservations " .
-                        "WHERE reservation_id={$reservation_id};";
+                        "WHERE code='{$code}';";
     if (!mysql_query($delete_statement, $conn)) {
       throw new Exception("Failed to remove the old reservation");
     }
 
     // Remove old records and then insert new records
-    $insert_statement = 'INSERT INTO reservations (reservation_id, listing_id, busy_date) VALUES ';
+    $insert_statement = 'INSERT INTO reservations (listing_id, busy_date, code) VALUES ';
     $values_to_update = array();
     $cur_time = $check_in_time;
     while ($cur_time < $check_out_time) {
       $busy_date = date('Y-m-d', $cur_time);
-      $values_to_update[] = "({$reservation_id}, {$listing_id}, '{$busy_date}')";
+      $values_to_update[] = "({$listing_id}, '{$busy_date}', '{$code}')";
       $cur_time += SECONDS_PER_DAY;
     }
     $insert_statement .= implode(',', $values_to_update) . ';';
@@ -252,7 +252,7 @@ function update($listing_id, $reservation_id, $check_in_time, $check_out_time) {
   return array(
     "succeed" => true,
     "listing_id" => $listing_id,
-    "reservation_id" => $reservation_id,
+    "code" => $code,
     "check_in" => date('Y-m-d', $check_in_time),
     "check_out" => date('Y-m-d', $check_out_time),
   );
@@ -266,7 +266,7 @@ function open_db_conn() {
   return $conn;
 }
 
-function sanity_check_input($action, $listing_id, $check_in, $check_out, $check_in_time, $check_out_time, $reservation_id) {
+function sanity_check_input($action, $listing_id, $check_in, $check_out, $check_in_time, $check_out_time, $code) {
   if ((is_null($check_in) || is_null($check_out)) && $action != CANCEL) {
     throw new Exception("missing check_in or check_out date");
   }
@@ -275,8 +275,8 @@ function sanity_check_input($action, $listing_id, $check_in, $check_out, $check_
     throw new Exception("listing_id missing");
   }
 
-  if (empty($reservation_id) && ($action == UPDATE || $action == RESERVE || $action == CANCEL)) {
-    throw new Exception("reservation_id missing");
+  if (empty($code) && ($action == UPDATE || $action == RESERVE || $action == CANCEL)) {
+    throw new Exception("code missing");
   }
 
   $now = time();
